@@ -1,0 +1,31 @@
+sequenceDiagram
+  participant Z as Zoho
+  participant I as Ingestion (Lambda)
+  participant Q as SQS/EventBridge
+  participant A as Airflow
+  participant W as Workers (Lambda)
+  participant P as RDS Postgres
+  participant S as S3
+  participant M as SageMaker
+  participant API as Data API (FastAPI)
+
+  Z->>I: New data available / webhook / scheduled pull
+  I->>S: Store raw payload (immutable)
+  I->>P: Upsert minimal metadata (device_id, timestamps)
+  I->>Q: Publish "raw_data_ready" event
+
+  Q->>A: Trigger DAG (or A polls)
+  A->>W: Run ETL job (container task)
+  W->>S: Write curated/cleaned dataset snapshot
+  W->>P: Write curated tables + quality stats
+
+  A->>M: Trigger training / refresh (optional schedule)
+  M->>S: Persist model artifacts + metrics
+  M->>P: Register model version + lineage
+
+  A->>W: Run forecast + goal seek
+  W->>P: Write forecast_results / goal_seek_results
+  W->>S: Write report files (csv/xlsx) + manifests
+
+  API->>P: Serve forecasts/goal seek
+  API->>S: Serve report download (presigned URL)

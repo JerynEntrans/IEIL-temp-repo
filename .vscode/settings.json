@@ -1,0 +1,11 @@
+{
+    "flake8.args": [
+        "--max-line-length=300"
+    ],
+    "files.exclude": {
+        "**/*.pyc": true,
+        "**/__pycache__": true,
+        "**/.pytest_cache": true
+    },
+    "debug.internalConsoleOptions": "neverOpen",
+}

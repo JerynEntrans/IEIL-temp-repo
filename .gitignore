@@ -1,0 +1,47 @@
+# Byte-code files
+*.pyc
+__pycache__/
+# for example, in the project root you could have a `src` directory with a `__pycache__` in it
+# so you'd use `src/__pycache__/` in a repo-level .gitignore file
+# you can also add other custom __pycache__ ignore rules if necessary
+
+# Generated files
+*.egg-info/
+*.eggs
+*.mo
+*.pot
+*.so
+
+# IDE and Editor files
+.idea/  # For PyCharm and other IntelliJ IDEs
+.vscode/ # For VS Code (can be more specific if needed)
+.mypy_cache/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+bin/
+include/
+lib/
+lib64/
+
+# Build artifacts
+build/
+dist/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-commit.txt
+
+# OS-specific files
+.DS_Store # macOS
+Thumbs.db # Windows
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Old code
+old_code/

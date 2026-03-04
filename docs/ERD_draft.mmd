@@ -1,0 +1,133 @@
+erDiagram
+  MASTER_REGISTRY {
+    BIGSERIAL id PK
+    TEXT run_id
+    TIMESTAMPTZ source_timestamp
+    TEXT source_timestamp_text
+    TEXT file_name
+    TEXT stored_path
+    TEXT plant_name
+    TEXT unit_name
+    TEXT location_name
+    TEXT device_id
+    TIMESTAMPTZ created_at
+  }
+
+  PROCESS_RUN_TRACKER {
+    BIGSERIAL id PK
+    TEXT run_id
+    TEXT parent_run_id
+    process_name_enum process_name
+    TEXT device_id
+    TIMESTAMPTZ process_start_ts
+    TIMESTAMPTZ process_end_ts
+    TIMESTAMPTZ data_start_ts
+    TIMESTAMPTZ data_end_ts
+    processing_state_enum processing_state
+    TEXT error_message
+    JSONB meta_json
+    TIMESTAMPTZ created_at
+    TIMESTAMPTZ updated_at
+  }
+
+  VALIDATED_DESALTER_DATA {
+    BIGSERIAL id PK
+    TEXT run_id
+    TEXT parent_run_id
+    TIMESTAMPTZ recorded_at
+    TEXT device_id
+    TEXT plant_name
+    TEXT unit_name
+    TEXT location_name
+    DOUBLE desalter_monitoring_press_kg_cm2
+    DOUBLE desalter_monitoring_w_w_temp_deg_c
+    DOUBLE chemical_consumption_demulsifier_ppm_unnamed_85_level_2
+    DOUBLE crude_details_crude_details_unnamed_2_level_2
+    DOUBLE crude_details_api_unnamed_4_level_2
+    DOUBLE crude_details_density_unnamed_5_level_2
+    DOUBLE desalter_monitoring_interface_level
+    DOUBLE desalter_2_monitoring_interface_level
+    DOUBLE o_h_boot_water_analysis_chloride_ppm
+    DOUBLE desalter_salt_ptb_o_l
+    DOUBLE desalter_brine_water_ph_ppm
+    DOUBLE desalter_brine_water_oil_ppm
+    JSONB extras_json
+    TIMESTAMPTZ created_at
+  }
+
+  DESALTER_FORECAST_RESULTS {
+    BIGSERIAL id PK
+    TEXT device_id
+    TIMESTAMPTZ forecast_timestamp
+    INT horizon_minutes
+    DOUBLE desalter_monitoring_interface_level
+    DOUBLE desalter_2_monitoring_interface_level
+    DOUBLE o_h_boot_water_analysis_chloride_ppm
+    DOUBLE desalter_salt_ptb_o_l
+    DOUBLE desalter_brine_water_ph_ppm
+    DOUBLE desalter_brine_water_oil_ppm
+    TEXT model_version
+    TEXT run_id
+    TIMESTAMPTZ created_at
+  }
+
+  DESALTER_GOAL_SEEK_RESULTS {
+    BIGSERIAL id PK
+    TEXT device_id
+    TIMESTAMPTZ run_timestamp
+    DOUBLE desalter_monitoring_mix_valve_dp_kg_cm2
+    DOUBLE desalter_monitoring_press_kg_cm2
+    DOUBLE desalter_monitoring_w_w_temp_deg_c
+    DOUBLE desalter_monitoring_amp3_amps
+    DOUBLE desalter_2_monitoring_temp_deg_c
+    DOUBLE chemical_consumption_demulsifier_ppm
+    DOUBLE crude_details_api
+    DOUBLE crude_details_density
+    DOUBLE crude_details_crude_details
+    JSONB result_json
+    TEXT model_version
+    TEXT run_id
+    TIMESTAMPTZ created_at
+  }
+
+  REPORT_REGISTRY {
+    BIGSERIAL id PK
+    TEXT run_id
+    TEXT device_id
+    TEXT report_type
+    TEXT s3_uri
+    TIMESTAMPTZ generated_at
+    JSONB meta_json
+  }
+
+  MODEL_REGISTRY {
+    BIGSERIAL id PK
+    TEXT device_id
+    model_type_enum model_type
+    TEXT model_version
+    TEXT s3_uri
+    TEXT artifact_sha256
+    JSONB feature_schema_json
+    JSONB metrics_json
+    JSONB trained_data_json
+    model_status_enum status
+    TIMESTAMPTZ activated_at
+    TIMESTAMPTZ created_at
+  }
+
+  %% ----------------------------
+  %% Relationships (logical, run_id based lineage)
+  %% ----------------------------
+
+  MASTER_REGISTRY ||--o{ PROCESS_RUN_TRACKER : "run_id"
+  PROCESS_RUN_TRACKER ||--o{ PROCESS_RUN_TRACKER : "parent_run_id -> run_id"
+
+  MASTER_REGISTRY ||--o{ VALIDATED_DESALTER_DATA : "run_id (parent_run_id)"
+  PROCESS_RUN_TRACKER ||--o{ VALIDATED_DESALTER_DATA : "run_id (VALIDATION)"
+
+  PROCESS_RUN_TRACKER ||--o{ DESALTER_FORECAST_RESULTS : "run_id (FORECAST)"
+  PROCESS_RUN_TRACKER ||--o{ DESALTER_GOAL_SEEK_RESULTS : "run_id (GOAL_SEEK)"
+  PROCESS_RUN_TRACKER ||--o{ REPORT_REGISTRY : "run_id (REPORT_GENERATION)"
+
+  MODEL_REGISTRY ||--o{ DESALTER_FORECAST_RESULTS : "model_version"
+  MODEL_REGISTRY ||--o{ DESALTER_GOAL_SEEK_RESULTS : "model_version"

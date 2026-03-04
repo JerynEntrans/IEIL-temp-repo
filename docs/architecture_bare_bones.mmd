@@ -1,0 +1,64 @@
+flowchart LR
+
+subgraph External
+  ZOHO[Zoho IoT / Zoho API]
+  UI[Ops / Dashboard / Analysts]
+end
+
+subgraph Edge
+  APIGW["API Gateway + Auth (Cognito/IAM/JWT)"]
+end
+
+subgraph Compute
+  INGEST["Ingestion Service (Lambda Task)"]
+  DATAAPI["Data API (FastAPI) (ECS/Fargate Service)"]
+  WORKERS["Workers (Lambda service) ETL • Forecast • GoalSeek • Reports"]
+end
+
+subgraph Orchestration
+  QUEUE["SQS Queue / EventBridge"]
+  AIRFLOW["Airflow Orchestrator (MWAA)"]
+end
+
+subgraph Storage
+  S3[(S3 raw • curated • reports • models)]
+  RDS[(RDS Postgres)]
+end
+
+subgraph ML
+  SM["SageMaker Training • Pipelines • Batch/Endpoint"]
+end
+
+subgraph Platform
+  SECRETS["Secrets Manager / Parameter Store"]
+  OBS["CloudWatch + Tracing/Metrics Dashboards • Alerts"]
+end
+
+UI --> APIGW --> DATAAPI
+ZOHO --> INGEST --> QUEUE
+INGEST --> S3
+INGEST --> RDS
+
+QUEUE --> AIRFLOW
+AIRFLOW --> WORKERS
+AIRFLOW --> SM
+
+WORKERS --> RDS
+WORKERS --> S3
+
+DATAAPI <--> RDS
+DATAAPI --> S3
+
+SM <--> S3
+SM --> RDS
+
+DATAAPI -.-> SECRETS
+WORKERS -.-> SECRETS
+AIRFLOW -.-> SECRETS
+INGEST -.-> SECRETS
+
+DATAAPI -.-> OBS
+WORKERS -.-> OBS
+AIRFLOW -.-> OBS
+INGEST -.-> OBS
+SM -.-> OBS
