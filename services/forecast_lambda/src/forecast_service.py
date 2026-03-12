@@ -1,10 +1,10 @@
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import xgboost as xgb
 
 from shared.schema.db import ProcessName, ProcessingState
-from shared.utils.db import fetch_model_spec, Db
+from shared.utils.db import Db, fetch_model_spec
 from shared.utils.s3 import load_booster_from_s3
 
 FORECAST_TARGETS = [
@@ -15,7 +15,6 @@ FORECAST_TARGETS = [
     "desalter_brine_water_ph_ppm",
     "desalter_brine_water_oil_ppm",
 ]
-
 UTC = timezone.utc
 
 
@@ -40,10 +39,13 @@ def run_forecast(event: dict, *, db: Db) -> dict:
         raise ValueError("validated_run_id (or validation_run_id) is required for run-based forecast")
 
     forecast_base = _parse_ts(event.get("data_end_ts") or event.get("forecast_timestamp"))
-
-    # model selection
     requested_version = event.get("model_version")
-    spec = fetch_model_spec(db, device_id=device_id, model_type="DESALTER_FORECAST", requested_version=requested_version)
+    spec = fetch_model_spec(
+        db,
+        device_id=device_id,
+        model_type="DESALTER_FORECAST",
+        model_version=requested_version,
+    )
     booster = load_booster_from_s3(spec)
 
     schema = spec.feature_schema or {}
@@ -54,8 +56,7 @@ def run_forecast(event: dict, *, db: Db) -> dict:
 
     if not features:
         raise ValueError("model_registry.feature_schema_json.features is required for forecast model")
-    if len(targets) != len(FORECAST_TARGETS):
-        # you can relax this later, but keep strict initially for correctness
+    if list(targets) != FORECAST_TARGETS:
         raise ValueError(f"Forecast targets mismatch. expected={FORECAST_TARGETS}, got={targets}")
 
     db.upsert_tracker(
@@ -66,11 +67,14 @@ def run_forecast(event: dict, *, db: Db) -> dict:
         state=ProcessingState.RUNNING,
         data_start_ts=event.get("data_start_ts"),
         data_end_ts=event.get("data_end_ts"),
-        meta={"model_version": spec.model_version, "model_registry_id": spec.model_registry_id, "validated_run_id": validated_run_id},
+        meta={
+            "model_version": spec.model_version,
+            "model_registry_id": spec.id,
+            "validated_run_id": validated_run_id,
+        },
         end_now=False,
     )
 
-    # Fetch latest row with all required features
     cols = ", ".join(["recorded_at"] + features)
     row = db.fetch_one(
         f"""
@@ -95,27 +99,26 @@ def run_forecast(event: dict, *, db: Db) -> dict:
             meta={"reason": "NO_VALIDATED_DATA_FOR_RUN", "validated_run_id": validated_run_id},
             end_now=True,
         )
-        return {"run_id": run_id, "validated_run_id": validated_run_id, "device_id": device_id, "skipped": True, "reason": "NO_VALIDATED_DATA_FOR_RUN"}
+        return {
+            "run_id": run_id,
+            "validated_run_id": validated_run_id,
+            "device_id": device_id,
+            "skipped": True,
+            "reason": "NO_VALIDATED_DATA_FOR_RUN",
+        }
 
-    # Build feature vector
-    # row = (recorded_at, f1, f2, ...)
     x_vals = [_coerce_float(v) for v in row[1:]]
-    # TODO: apply preprocessing rules (fillna/clip) from schema if add them
     if any(v is None for v in x_vals):
-        # simplest safe behavior: fail fast (or fill with 0/median if defined)
-        raise ValueError("Missing feature values for forecast. Add preprocessing fill strategy or ensure validation outputs non-null features.")
+        raise ValueError("Missing feature values for forecast. Add fill strategy or ensure validation outputs non-null features.")
 
     X = np.array([x_vals], dtype=float)
-    dmat = xgb.DMatrix(X)
-
-    pred = booster.predict(dmat)
-    # Expect multi-horizon: shape (1, horizons*targets) OR (horizons*targets,)
-    pred = np.array(pred).reshape(-1)
-
+    pred = np.array(booster.predict(xgb.DMatrix(X))).reshape(-1)
     expected = len(horizons) * len(targets)
     if pred.size != expected:
-        raise ValueError(f"Unexpected prediction size: got={pred.size}, expected={expected} (horizons={horizons}, targets={targets})")
-
+        raise ValueError(
+            f"Unexpected prediction size: got={pred.size}, expected={expected} "
+            f"(horizons={horizons}, targets={targets})"
+        )
     pred = pred.reshape(len(horizons), len(targets))
 
     inserted = 0
@@ -123,28 +126,31 @@ def run_forecast(event: dict, *, db: Db) -> dict:
         for i, h in enumerate(horizons):
             ts = forecast_base + timedelta(minutes=int(h))
             values = {t: float(pred[i, j]) for j, t in enumerate(targets)}
-
             cur.execute(
                 f"""
                 INSERT INTO desalter_forecast_results (
-                  run_id, device_id, forecast_timestamp, horizon_minutes,
-                  {",".join(FORECAST_TARGETS)},
-                  model_version
+                    run_id, device_id, forecast_timestamp, horizon_minutes,
+                    {','.join(FORECAST_TARGETS)}, model_version
                 )
                 VALUES (
-                  %(run_id)s, %(device_id)s, %(forecast_timestamp)s, %(horizon_minutes)s,
-                  {",".join([f"%({c})s" for c in FORECAST_TARGETS])},
-                  %(model_version)s
+                    %(run_id)s, %(device_id)s, %(forecast_timestamp)s, %(horizon_minutes)s,
+                    {','.join([f'%({c})s' for c in FORECAST_TARGETS])}, %(model_version)s
                 )
                 ON CONFLICT (run_id, device_id, forecast_timestamp, horizon_minutes)
                 DO UPDATE SET
-                  {",".join([f"{c}=EXCLUDED.{c}" for c in FORECAST_TARGETS])},
-                  model_version=EXCLUDED.model_version;
+                    {','.join([f'{c}=EXCLUDED.{c}' for c in FORECAST_TARGETS])},
+                    model_version=EXCLUDED.model_version;
                 """,
-                {"run_id": run_id, "device_id": device_id, "forecast_timestamp": ts, "horizon_minutes": int(h), **values, "model_version": spec.model_version},
+                {
+                    "run_id": run_id,
+                    "device_id": device_id,
+                    "forecast_timestamp": ts,
+                    "horizon_minutes": int(h),
+                    **values,
+                    "model_version": spec.model_version,
+                },
             )
             inserted += 1
-
     db._conn.commit()
 
     db.upsert_tracker(
@@ -160,7 +166,7 @@ def run_forecast(event: dict, *, db: Db) -> dict:
             "horizons": horizons,
             "validated_run_id": validated_run_id,
             "model_version": spec.model_version,
-            "model_registry_id": spec.model_registry_id,
+            "model_registry_id": spec.id,
         },
         end_now=True,
     )
@@ -171,7 +177,7 @@ def run_forecast(event: dict, *, db: Db) -> dict:
         "device_id": device_id,
         "forecast_timestamp": forecast_base.isoformat(),
         "model_version": spec.model_version,
-        "model_registry_id": spec.model_registry_id,
+        "model_registry_id": spec.id,
         "forecast_rows": inserted,
         "horizons_minutes": horizons,
         "skipped": inserted == 0,

@@ -22,9 +22,17 @@ class ProcessingState(str, Enum):
 class ModelSpec:
     id: int
     device_id: str
-    model_type: str      # e.g. "DESALTER_FORECAST"
-    model_version: str   # e.g. "xgb-v3"
+    model_type: str
+    model_version: str
     s3_uri: str
     artifact_sha256: str | None
     feature_schema: dict[str, Any]
     metrics: dict[str, Any]
+
+    @property
+    def model_registry_id(self) -> int:
+        return self.id
+
+    @property
+    def sha256(self) -> str | None:
+        return self.artifact_sha256

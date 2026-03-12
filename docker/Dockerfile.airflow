@@ -1,0 +1,23 @@
+FROM apache/airflow:2.9.3
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+
+RUN cat <<'EOF' > /tmp/requirements-extra.txt
+apache-airflow-providers-postgres>=5.7.0
+boto3>=1.34.0
+requests>=2.31.0
+python-dateutil>=2.8.2
+python-dotenv>=1.0.0
+psycopg[binary]>=3.1.18,<4.0.0
+numpy>=1.24.0,<2.0.0
+xgboost>=2.0.0,<3.0.0
+EOF
+
+RUN pip install --no-cache-dir -r /tmp/requirements-extra.txt

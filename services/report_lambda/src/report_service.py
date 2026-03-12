@@ -1,44 +1,37 @@
 from __future__ import annotations
 
-import csv
-import io
 import json
 from datetime import datetime, timezone
 
 import boto3
 
-from shared.schema.db import ProcessingState, ProcessName
+from shared.schema.db import ProcessName, ProcessingState
 
 UTC = timezone.utc
 s3 = boto3.client("s3")
 
 
-def _put_text(bucket: str, key: str, text: str, content_type: str = "text/plain") -> str:
-    s3.put_object(Bucket=bucket, Key=key, Body=text.encode("utf-8"), ContentType=content_type)
-    return f"s3://{bucket}/{key}"
+def _parse_ts(value):
+    if not value:
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(UTC)
 
 
-def generate_report(event: dict, *, db) -> dict:
+def generate_report(event: dict, *, db):
     run_id = event.get("run_id")
     if not run_id:
         raise ValueError("report generation requires run_id")
 
     device_id = event.get("device_id", "desalter")
-    report_type = event.get("report_type", "daily_summary")
-    out_bucket = event.get("reports_s3_bucket") or event.get("s3_bucket") or ""
-    out_prefix = (event.get("reports_s3_prefix") or "reports").strip("/")
-
-    if not out_bucket:
-        raise ValueError("report generation requires reports_s3_bucket (or s3_bucket)")
-
-    generated_at = datetime.now(UTC)
-    dt = generated_at.strftime("%Y-%m-%d")
-    ts = generated_at.strftime("%Y%m%dT%H%M%SZ")
-    key = f"{out_prefix}/device_id={device_id}/dt={dt}/run_id={run_id}/{report_type}_{ts}.csv"
+    report_type = event.get("report_type") or "daily_summary"
+    reports_bucket = event.get("reports_s3_bucket")
+    reports_prefix = (event.get("reports_s3_prefix") or "reports").strip("/")
+    if not reports_bucket:
+        raise ValueError("reports_s3_bucket is required")
 
     db.upsert_tracker(
         run_id=run_id,
-        parent_run_id=run_id,
+        parent_run_id=event.get("validated_run_id") or run_id,
         process_name=ProcessName.REPORT_GENERATION,
         device_id=device_id,
         state=ProcessingState.RUNNING,
@@ -48,8 +41,7 @@ def generate_report(event: dict, *, db) -> dict:
         end_now=False,
     )
 
-    # Forecast rows for THIS RUN
-    forecasts = db.fetch_all(
+    forecast_rows = db.fetch_all(
         """
         SELECT forecast_timestamp, horizon_minutes,
                desalter_monitoring_interface_level,
@@ -57,84 +49,89 @@ def generate_report(event: dict, *, db) -> dict:
                o_h_boot_water_analysis_chloride_ppm,
                desalter_salt_ptb_o_l,
                desalter_brine_water_ph_ppm,
-               desalter_brine_water_oil_ppm
+               desalter_brine_water_oil_ppm,
+               model_version
         FROM desalter_forecast_results
-        WHERE device_id=%s
-          AND run_id=%s
-        ORDER BY forecast_timestamp DESC, horizon_minutes ASC
-        LIMIT 50;
+        WHERE run_id=%s AND device_id=%s
+        ORDER BY forecast_timestamp, horizon_minutes;
         """,
-        (device_id, run_id),
+        (run_id, device_id),
     )
 
-    # Goal seek for THIS RUN
-    goal = db.fetch_one(
+    goal_seek_row = db.fetch_one(
         """
-        SELECT run_timestamp, result_json, model_version
+        SELECT run_timestamp, chemical_consumption_demulsifier_ppm, result_json, model_version
         FROM desalter_goal_seek_results
-        WHERE device_id=%s
-          AND run_id=%s
+        WHERE run_id=%s AND device_id=%s
         ORDER BY run_timestamp DESC
         LIMIT 1;
         """,
-        (device_id, run_id),
+        (run_id, device_id),
     )
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["section", "key", "value"])
+    report = {
+        "run_id": run_id,
+        "device_id": device_id,
+        "report_type": report_type,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "window": {
+            "data_start_ts": (_parse_ts(event.get("data_start_ts")) or ""),
+            "data_end_ts": (_parse_ts(event.get("data_end_ts")) or ""),
+        },
+        "forecast": [
+            {
+                "forecast_timestamp": row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0]),
+                "horizon_minutes": row[1],
+                "desalter_monitoring_interface_level": row[2],
+                "desalter_2_monitoring_interface_level": row[3],
+                "o_h_boot_water_analysis_chloride_ppm": row[4],
+                "desalter_salt_ptb_o_l": row[5],
+                "desalter_brine_water_ph_ppm": row[6],
+                "desalter_brine_water_oil_ppm": row[7],
+                "model_version": row[8],
+            }
+            for row in forecast_rows
+        ],
+        "goal_seek": None,
+        "summary": {
+            "forecast_row_count": len(forecast_rows),
+            "has_goal_seek": goal_seek_row is not None,
+        },
+    }
 
-    writer.writerow(["meta", "device_id", device_id])
-    writer.writerow(["meta", "run_id", run_id])
-    writer.writerow(["meta", "generated_at", generated_at.isoformat()])
-    writer.writerow(["meta", "report_type", report_type])
+    if goal_seek_row:
+        report["goal_seek"] = {
+            "run_timestamp": goal_seek_row[0].isoformat() if hasattr(goal_seek_row[0], "isoformat") else str(goal_seek_row[0]),
+            "chemical_consumption_demulsifier_ppm": goal_seek_row[1],
+            "result": goal_seek_row[2] or {},
+            "model_version": goal_seek_row[3],
+        }
 
-    if goal:
-        goal_ts, goal_json, goal_model = goal
-        writer.writerow(["goal_seek", "run_timestamp", goal_ts.isoformat()])
-        writer.writerow(["goal_seek", "model_version", goal_model])
-        try:
-            gj = goal_json if isinstance(goal_json, dict) else json.loads(goal_json)
-        except Exception:
-            gj = {"raw": str(goal_json)}
-        for k, v in gj.items():
-            writer.writerow(["goal_seek", k, v])
-    else:
-        writer.writerow(["goal_seek", "note", "no goal_seek row found for this run_id"])
+    key = f"{reports_prefix}/device_id={device_id}/run_id={run_id}/{report_type}.json"
+    body = json.dumps(report, default=str, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    s3.put_object(Bucket=reports_bucket, Key=key, Body=body, ContentType="application/json")
+    s3_uri = f"s3://{reports_bucket}/{key}"
 
-    if not forecasts:
-        writer.writerow(["forecast", "note", "no forecast rows found for this run_id"])
-
-    for f in forecasts:
-        ft, h, i1, i2, cl, salt, ph, oil = f
-        writer.writerow(["forecast", f"ts+{h}m", ft.isoformat()])
-        writer.writerow(["forecast", f"interface_level+{h}m", i1])
-        writer.writerow(["forecast", f"interface2_level+{h}m", i2])
-        writer.writerow(["forecast", f"chloride_ppm+{h}m", cl])
-        writer.writerow(["forecast", f"salt_ptb+{h}m", salt])
-        writer.writerow(["forecast", f"brine_ph+{h}m", ph])
-        writer.writerow(["forecast", f"brine_oil_ppm+{h}m", oil])
-
-    csv_text = buf.getvalue()
-    s3_uri = _put_text(out_bucket, key, csv_text, content_type="text/csv")
-
-    db.execute(
-        """
-        INSERT INTO report_registry (run_id, device_id, report_type, s3_uri, meta_json)
-        VALUES (%s,%s,%s,%s,%s::jsonb);
-        """,
-        (run_id, device_id, report_type, s3_uri, json.dumps({"rows": len(csv_text.splitlines())})),
+    db.insert_report_registry(
+        run_id=run_id,
+        device_id=device_id,
+        report_type=report_type,
+        s3_uri=s3_uri,
+        meta={
+            "forecast_row_count": len(forecast_rows),
+            "has_goal_seek": goal_seek_row is not None,
+        },
     )
 
     db.upsert_tracker(
         run_id=run_id,
-        parent_run_id=run_id,
+        parent_run_id=event.get("validated_run_id") or run_id,
         process_name=ProcessName.REPORT_GENERATION,
         device_id=device_id,
         state=ProcessingState.SUCCESS,
         data_start_ts=event.get("data_start_ts"),
         data_end_ts=event.get("data_end_ts"),
-        meta={"report_s3_uri": s3_uri},
+        meta={"report_type": report_type, "s3_uri": s3_uri},
         end_now=True,
     )
 
@@ -142,6 +139,7 @@ def generate_report(event: dict, *, db) -> dict:
         "run_id": run_id,
         "device_id": device_id,
         "report_type": report_type,
-        "report_s3_uri": s3_uri,
-        "skipped": False,
+        "s3_uri": s3_uri,
+        "forecast_row_count": len(forecast_rows),
+        "has_goal_seek": goal_seek_row is not None,
     }
