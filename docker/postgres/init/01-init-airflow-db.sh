@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DB_USER="${POSTGRES_USER:-ieil}"
+AIRFLOW_DB_USER="${AIRFLOW_DB_USER:-airflow}"
+AIRFLOW_DB_PASSWORD="${AIRFLOW_DB_PASSWORD:-airflow}"
+AIRFLOW_DB_NAME="${AIRFLOW_DB_NAME:-airflow}"
+
+psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname postgres <<SQL
+DO
+\$\$
+BEGIN
+   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${AIRFLOW_DB_USER}') THEN
+      CREATE ROLE ${AIRFLOW_DB_USER} LOGIN PASSWORD '${AIRFLOW_DB_PASSWORD}';
+   END IF;
+END
+\$\$;
+SQL
+
+psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname postgres <<SQL
+SELECT 'CREATE DATABASE ${AIRFLOW_DB_NAME} OWNER ${AIRFLOW_DB_USER}'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${AIRFLOW_DB_NAME}')\gexec
+SQL
+
+psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname postgres <<SQL
+GRANT ALL PRIVILEGES ON DATABASE ${AIRFLOW_DB_NAME} TO ${AIRFLOW_DB_USER};
+SQL

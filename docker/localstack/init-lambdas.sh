@@ -17,28 +17,25 @@ aws_local() {
 aws_local s3 mb s3://ieil-raw || true
 aws_local s3 mb s3://ieil-reports || true
 
-install_common_deps() {
-  local dest="$1"
+install_deps() {
+  local req_file="$1"
+  local dest="$2"
+
   python -m pip install --no-cache-dir -q \
-    boto3>=1.34.0 \
-    requests>=2.31.0 \
-    python-dateutil>=2.8.2 \
-    python-dotenv>=1.0.0 \
-    'psycopg[binary]>=3.1.18,<4.0.0' \
-    numpy>=1.24.0,<2.0.0 \
-    xgboost>=2.0.0,<3.0.0 \
+    -r "$req_file" \
     -t "$dest"
 }
 
 package_lambda() {
   local service_name="$1"
   local src_dir="$2"
+  local req_file="$3"
   local zip_path="$BUILD_ROOT/${service_name}.zip"
   local workdir="$BUILD_ROOT/${service_name}"
 
   rm -rf "$workdir"
   mkdir -p "$workdir"
-  install_common_deps "$workdir"
+  install_deps "$req_file" "$workdir"
   cp -R "$ROOT/shared" "$workdir/shared"
   cp -R "$src_dir" "$workdir/src"
 
@@ -81,10 +78,10 @@ JSON
     --environment "$env_json" >/dev/null
 }
 
-package_lambda ingestion_lambda "$ROOT/services/ingestion_lambda/src"
-package_lambda validation_lambda "$ROOT/services/validation_lambda/src"
-package_lambda forecast_lambda "$ROOT/services/forecast_lambda/src"
-package_lambda goal_seek_lambda "$ROOT/services/goal_seek_lambda/src"
-package_lambda report_lambda "$ROOT/services/report_lambda/src"
+package_lambda ingestion_lambda "$ROOT/services/ingestion_lambda/src" "$ROOT/requirements/lambda_common.txt"
+package_lambda validation_lambda "$ROOT/services/validation_lambda/src" "$ROOT/requirements/lambda_common.txt"
+package_lambda report_lambda "$ROOT/services/report_lambda/src" "$ROOT/requirements/lambda_common.txt"
+package_lambda forecast_lambda "$ROOT/services/forecast_lambda/src" "$ROOT/requirements/lambda_ml.txt"
+package_lambda goal_seek_lambda "$ROOT/services/goal_seek_lambda/src" "$ROOT/requirements/lambda_ml.txt"
 
 echo "Local IEIL lambdas created in LocalStack."

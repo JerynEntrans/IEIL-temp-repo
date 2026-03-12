@@ -6,33 +6,37 @@ x-airflow-common: &airflow-common
     - .env.local
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres:5432/${AIRFLOW_DB_NAME:-airflow}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__RBAC: "true"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
-    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
     PYTHONPATH: /opt/project:/opt/airflow/dags
-    AWS_DEFAULT_REGION: ap-south-1
-    AWS_ACCESS_KEY_ID: test
-    AWS_SECRET_ACCESS_KEY: test
+
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-ap-south-1}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
     AWS_ENDPOINT_URL: http://localstack:4566
     AWS_ENDPOINT_URL_LAMBDA: http://localstack:4566
     AWS_ENDPOINT_URL_S3: http://localstack:4566
+
     DB_HOST: postgres
     DB_PORT: 5432
-    DB_NAME: ieil
-    DB_USER: ieil
-    DB_PASSWORD: ieil
+    DB_NAME: ${APP_DB_NAME:-ieil}
+    DB_USER: ${APP_DB_USER:-ieil}
+    DB_PASSWORD: ${APP_DB_PASSWORD:-ieil}
     DB_SSLMODE: disable
-    RAW_S3_BUCKET: ieil-raw
-    RAW_S3_PREFIX: raw/zoho
-    REPORTS_S3_BUCKET: ieil-reports
-    REPORTS_S3_PREFIX: reports
-    INGESTION_LAMBDA_NAME: ingestion_lambda
-    VALIDATION_LAMBDA_NAME: validation_lambda
-    FORECAST_LAMBDA_NAME: forecast_lambda
-    GOAL_SEEK_LAMBDA_NAME: goal_seek_lambda
-    REPORT_LAMBDA_NAME: report_lambda
+
+    RAW_S3_BUCKET: ${RAW_S3_BUCKET:-ieil-raw}
+    RAW_S3_PREFIX: ${RAW_S3_PREFIX:-raw/zoho}
+    REPORTS_S3_BUCKET: ${REPORTS_S3_BUCKET:-ieil-reports}
+    REPORTS_S3_PREFIX: ${REPORTS_S3_PREFIX:-reports}
+
+    INGESTION_LAMBDA_NAME: ${INGESTION_LAMBDA_NAME:-ingestion_lambda}
+    VALIDATION_LAMBDA_NAME: ${VALIDATION_LAMBDA_NAME:-validation_lambda}
+    FORECAST_LAMBDA_NAME: ${FORECAST_LAMBDA_NAME:-forecast_lambda}
+    GOAL_SEEK_LAMBDA_NAME: ${GOAL_SEEK_LAMBDA_NAME:-goal_seek_lambda}
+    REPORT_LAMBDA_NAME: ${REPORT_LAMBDA_NAME:-report_lambda}
   volumes:
     - ./:/opt/project
     - ./:/workspace
@@ -50,18 +54,22 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: ieil
-      POSTGRES_PASSWORD: ieil
-      POSTGRES_DB: ieil
+      POSTGRES_USER: ${APP_DB_USER:-ieil}
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD:-ieil}
+      POSTGRES_DB: ${APP_DB_NAME:-ieil}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:-airflow}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-airflow}
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ieil -d ieil"]
+      test: ["CMD-SHELL", "pg_isready -U ${APP_DB_USER:-ieil} -d ${APP_DB_NAME:-ieil}"]
       interval: 5s
       timeout: 5s
       retries: 20
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
 
   flyway:
     image: flyway/flyway:10
@@ -69,9 +77,9 @@ services:
       postgres:
         condition: service_healthy
     command:
-      - -url=jdbc:postgresql://postgres:5432/ieil
-      - -user=ieil
-      - -password=ieil
+      - -url=jdbc:postgresql://postgres:5432/${APP_DB_NAME:-ieil}
+      - -user=${APP_DB_USER:-ieil}
+      - -password=${APP_DB_PASSWORD:-ieil}
       - -connectRetries=30
       - -locations=filesystem:/flyway/sql
       - migrate
@@ -83,9 +91,9 @@ services:
     environment:
       SERVICES: s3,lambda,iam,sts
       DEBUG: "1"
-      AWS_DEFAULT_REGION: ap-south-1
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-ap-south-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
       DOCKER_HOST: unix:///var/run/docker.sock
       LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT: 180
     ports:
