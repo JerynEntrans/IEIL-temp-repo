@@ -45,3 +45,4 @@ Thumbs.db # Windows
 
 # Old code
 old_code/
+.env.local
