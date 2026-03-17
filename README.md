@@ -1,6 +1,6 @@
 # IEIL – Temporary Development Repository
 
-**Repository:** IEIL (Internal Engineering Integration Layer)  
+**Repository:** IEIL (Ion Exchange India ltd.)  
 **Status:** 🚧 Work in progress – temporary repo for initial development and end-to-end testing.
 
 This repository contains the early-stage implementation of the IEIL data pipeline and supporting services.  
