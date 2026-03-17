@@ -79,7 +79,7 @@ def run_forecast(event: dict, *, db) -> dict:
                   {",".join([f"%({c})s" for c in FORECAST_TARGETS])},
                   %(model_version)s, %(run_id)s
                 )
-                ON CONFLICT (device_id, forecast_timestamp, horizon_minutes)
+                                ON CONFLICT (run_id, device_id, forecast_timestamp, horizon_minutes)
                 DO UPDATE SET
                   {",".join([f"{c}=EXCLUDED.{c}" for c in FORECAST_TARGETS])},
                   model_version=EXCLUDED.model_version,

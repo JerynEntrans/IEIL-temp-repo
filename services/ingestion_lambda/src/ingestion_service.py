@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta, timezone
 from shared.utils.ids import new_run_id
 from shared.utils.s3 import S3RawStore
@@ -44,9 +45,14 @@ def ingest_zoho_incremental(event: dict, *, db) -> dict:
     )
 
     try:
-        token = ZohoTokenManager().get_access_token()
-        client = ZohoIoTClient(token)
-        payload = client.fetch_custom_range(plant_id=plant_id, from_ts=data_start_utc, to_ts=data_end_utc)
+        if os.environ.get("OFFLINE_JSON_TESTING", "false").lower() == "true":
+            import json
+            with open(os.environ["OFFLINE_JSON_TESTING_FILE_PATH"], "r") as f:
+                payload = json.load(f)
+        else:
+            token = ZohoTokenManager().get_access_token()
+            client = ZohoIoTClient(token)
+            payload = client.fetch_custom_range(plant_id=plant_id, from_ts=data_start_utc, to_ts=data_end_utc)
 
         if payload is None:
             db.upsert_tracker(

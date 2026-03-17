@@ -3,11 +3,14 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import boto3
-import xgboost as xgb
 
 from shared.schema.db import ModelSpec
+
+if TYPE_CHECKING:
+    import xgboost as xgb
 
 s3_client = boto3.client("s3")
 
@@ -86,7 +89,12 @@ def download_s3_to_tmp(s3_uri: str, *, tmp_path: str) -> tuple[str, str]:
     return tmp_path, sha
 
 
-def load_booster_from_s3(spec: ModelSpec) -> xgb.Booster:
+def load_booster_from_s3(spec: ModelSpec):
+    try:
+        import xgboost as xgb
+    except ImportError as exc:
+        raise RuntimeError("xgboost is required to load model artifacts") from exc
+
     cache_path = f"/tmp/xgb_model_{spec.id}.json"
     if os.path.exists(cache_path):
         booster = xgb.Booster()

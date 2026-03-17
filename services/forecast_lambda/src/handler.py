@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
+
 from shared.utils.db import Db
-from .forecast_service import run_forecast
+
+if os.getenv("USE_ML_MODELS", "false").lower() == "true":
+    from .forecast_service import run_forecast
+else:
+    from .no_ML_forcast_service import run_forecast
 
 
 def handler(event, context):

@@ -21,26 +21,45 @@ install_deps() {
   local req_file="$1"
   local dest="$2"
 
-  python -m pip install --no-cache-dir -q \
+  PIP_DISABLE_PIP_VERSION_CHECK=1 python -m pip install --no-cache-dir -q --ignore-installed \
     -r "$req_file" \
     -t "$dest"
+}
+
+prepare_deps_cache() {
+  local req_file="$1"
+  local cache_dir="$2"
+
+  if [[ -f "$cache_dir/.ready" ]]; then
+    return
+  fi
+
+  rm -rf "$cache_dir"
+  mkdir -p "$cache_dir"
+  install_deps "$req_file" "$cache_dir"
+  touch "$cache_dir/.ready"
 }
 
 package_lambda() {
   local service_name="$1"
   local src_dir="$2"
-  local req_file="$3"
+  local deps_cache_dir="$3"
   local zip_path="$BUILD_ROOT/${service_name}.zip"
   local workdir="$BUILD_ROOT/${service_name}"
 
   rm -rf "$workdir"
   mkdir -p "$workdir"
-  install_deps "$req_file" "$workdir"
+  cp -R "$deps_cache_dir"/. "$workdir"/
+  rm -f "$workdir/.ready"
   cp -R "$ROOT/shared" "$workdir/shared"
   cp -R "$src_dir" "$workdir/src"
+  if [[ -d "$ROOT/local_test_data" ]]; then
+    cp -R "$ROOT/local_test_data" "$workdir/local_test_data"
+  fi
 
   (
     cd "$workdir"
+    rm -f "$zip_path"
     zip -qr "$zip_path" .
   )
 
@@ -61,7 +80,10 @@ package_lambda() {
   "RAW_S3_BUCKET":"ieil-raw",
   "RAW_S3_PREFIX":"raw/zoho",
   "REPORTS_S3_BUCKET":"ieil-reports",
-  "REPORTS_S3_PREFIX":"reports"
+  "REPORTS_S3_PREFIX":"reports",
+  "OFFLINE_JSON_TESTING":"${OFFLINE_JSON_TESTING:-true}",
+  "OFFLINE_JSON_TESTING_FILE_PATH":"${OFFLINE_JSON_TESTING_FILE_PATH:-/var/task/local_test_data/offline_data_combined_report_zoho_like.json}",
+  "USE_ML_MODELS":"${USE_ML_MODELS:-false}"
 }}
 JSON
 )
@@ -78,10 +100,13 @@ JSON
     --environment "$env_json" >/dev/null
 }
 
-package_lambda ingestion_lambda "$ROOT/services/ingestion_lambda/src" "$ROOT/requirements/lambda_common.txt"
-package_lambda validation_lambda "$ROOT/services/validation_lambda/src" "$ROOT/requirements/lambda_common.txt"
-package_lambda report_lambda "$ROOT/services/report_lambda/src" "$ROOT/requirements/lambda_common.txt"
-package_lambda forecast_lambda "$ROOT/services/forecast_lambda/src" "$ROOT/requirements/lambda_ml.txt"
-package_lambda goal_seek_lambda "$ROOT/services/goal_seek_lambda/src" "$ROOT/requirements/lambda_ml.txt"
+  COMMON_DEPS_CACHE="$BUILD_ROOT/deps_common"
+  prepare_deps_cache "$ROOT/requirements/lambda_common.txt" "$COMMON_DEPS_CACHE"
+
+  package_lambda ingestion_lambda "$ROOT/services/ingestion_lambda/src" "$COMMON_DEPS_CACHE"
+  package_lambda validation_lambda "$ROOT/services/validation_lambda/src" "$COMMON_DEPS_CACHE"
+  package_lambda report_lambda "$ROOT/services/report_lambda/src" "$COMMON_DEPS_CACHE"
+  package_lambda forecast_lambda "$ROOT/services/forecast_lambda/src" "$COMMON_DEPS_CACHE"
+  package_lambda goal_seek_lambda "$ROOT/services/goal_seek_lambda/src" "$COMMON_DEPS_CACHE"
 
 echo "Local IEIL lambdas created in LocalStack."

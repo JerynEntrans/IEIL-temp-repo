@@ -103,14 +103,12 @@ def run_goal_seek(event: dict, *, db) -> dict:
               crude_details_api,
               crude_details_density,
               crude_details_crude_details,
-              desalter_monitoring_interface_level,
-              desalter_2_monitoring_interface_level,
               result_json,
               model_version,
               run_id
             )
-            VALUES (%(device_id)s,%(run_timestamp)s,%(press)s,%(wwt)s,%(demuls)s,%(api)s,%(density)s,%(crude)s,%(int1)s,%(int2)s,%(result)s::jsonb,%(model_version)s,%(run_id)s)
-            ON CONFLICT (device_id, run_timestamp)
+                        VALUES (%(device_id)s,%(run_timestamp)s,%(press)s,%(wwt)s,%(demuls)s,%(api)s,%(density)s,%(crude)s,%(result)s::jsonb,%(model_version)s,%(run_id)s)
+                        ON CONFLICT (run_id, device_id, run_timestamp)
             DO UPDATE SET
               result_json=EXCLUDED.result_json,
               model_version=EXCLUDED.model_version,
@@ -125,8 +123,6 @@ def run_goal_seek(event: dict, *, db) -> dict:
                 "api": api,
                 "density": density,
                 "crude": crude,
-                "int1": int1,
-                "int2": int2,
                 "result": json.dumps(result_json),
                 "model_version": model_version,
                 "run_id": run_id,

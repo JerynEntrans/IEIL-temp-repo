@@ -1,6 +1,7 @@
 import json
 import os
 from contextlib import contextmanager
+from enum import Enum
 
 import psycopg
 
@@ -126,11 +127,11 @@ class Db:
             {
                 "run_id": run_id,
                 "parent_run_id": parent_run_id,
-                "process_name": str(process_name),
+                "process_name": process_name.value if isinstance(process_name, Enum) else str(process_name),
                 "device_id": device_id,
                 "data_start_ts": data_start_ts,
                 "data_end_ts": data_end_ts,
-                "state": str(state),
+                "state": state.value if isinstance(state, Enum) else str(state),
                 "error_message": final_error,
                 "meta_json": json.dumps(meta),
                 "end_now": end_now,
