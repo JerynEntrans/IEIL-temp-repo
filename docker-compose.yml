@@ -92,6 +92,9 @@ services:
       SERVICES: s3,lambda,iam,sts
       DEBUG: "1"
       PERSISTENCE: "1"
+      SNAPSHOT_SAVE_STRATEGY: ON_REQUEST
+      SNAPSHOT_LOAD_STRATEGY: ON_STARTUP
+      S3_BACKUP_INTERVAL_SECONDS: 10
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-ap-south-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
@@ -101,7 +104,10 @@ services:
       - "4566:4566"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker/localstack/restore-s3.sh:/etc/localstack/init/ready.d/00-restore-s3.sh:ro
+      - ./docker/localstack/backup-s3-loop.sh:/etc/localstack/init/ready.d/10-backup-s3-loop.sh:ro
       - ./docker/localstack/init-lambdas.sh:/etc/localstack/init/ready.d/init-lambdas.sh:ro
+      - ./docker/localstack/save-s3.sh:/etc/localstack/init/shutdown.d/00-save-s3.sh:ro
       - ./:/repo:ro
       - localstack_data:/var/lib/localstack
 

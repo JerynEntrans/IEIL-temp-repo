@@ -91,6 +91,15 @@ Typical local endpoints:
 
 Credentials and connection details may be configured in `.env`.
 
+### LocalStack S3 persistence note
+
+This project includes LocalStack startup hooks that restore S3 buckets/objects from
+`/var/lib/localstack/s3-backup`, and a periodic backup loop that syncs live S3
+data back into that same directory.
+
+- Backup interval is controlled by `S3_BACKUP_INTERVAL_SECONDS` in `docker-compose.yml` (default: `10`).
+- To avoid losing the most recent writes, wait at least one backup interval before stopping containers.
+
 ---
 
 # Database Migrations
