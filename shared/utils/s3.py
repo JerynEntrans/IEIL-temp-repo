@@ -89,6 +89,58 @@ def download_s3_to_tmp(s3_uri: str, *, tmp_path: str) -> tuple[str, str]:
     return tmp_path, sha
 
 
+def load_joblib_model_from_s3(spec: ModelSpec):
+    """
+    Load a joblib-serialised goal-seek model from the S3 artifact stored in model_registry.
+
+    SageMaker packages the training output as model.tar.gz; this function extracts
+    ``desalter_model.pkl`` from that archive.  For locally-uploaded raw pkl files the
+    bytes are loaded directly.  The result is cached under /tmp/ for the Lambda lifetime.
+    """
+    import io
+    import tarfile
+
+    cache_path = f"/tmp/goalseek_model_{spec.id}.pkl"
+    if os.path.exists(cache_path):
+        import joblib
+        return joblib.load(cache_path)
+
+    bucket, key = parse_s3_uri(spec.s3_uri)
+    body = s3_client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
+    if spec.artifact_sha256:
+        got_sha = sha256_bytes(body)
+        if got_sha != spec.artifact_sha256:
+            raise ValueError(
+                f"Model sha256 mismatch for {spec.s3_uri}: expected {spec.artifact_sha256}, got {got_sha}"
+            )
+
+    # Handle .tar.gz (SageMaker artifact) or raw .pkl
+    pkl_bytes: bytes
+    if key.endswith(".tar.gz") or body[:2] == b"\x1f\x8b":
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tf:
+            # Accept desalter_model.pkl or model.pkl at any depth
+            members = tf.getnames()
+            pkl_name = next(
+                (m for m in members if m.endswith("desalter_model.pkl")),
+                next((m for m in members if m.endswith(".pkl")), None),
+            )
+            if not pkl_name:
+                raise ValueError(
+                    f"No .pkl file found in goal-seek model artifact {spec.s3_uri}. "
+                    f"Contents: {members}"
+                )
+            pkl_bytes = tf.extractfile(pkl_name).read()
+    else:
+        pkl_bytes = body
+
+    with open(cache_path, "wb") as f:
+        f.write(pkl_bytes)
+
+    import joblib
+    return joblib.load(cache_path)
+
+
 def load_booster_from_s3(spec: ModelSpec):
     try:
         import xgboost as xgb

@@ -81,9 +81,12 @@ package_lambda() {
   "RAW_S3_PREFIX":"raw/zoho",
   "REPORTS_S3_BUCKET":"ieil-reports",
   "REPORTS_S3_PREFIX":"reports",
+  "MODEL_S3_BUCKET":"ieil-raw",
+  "MODEL_S3_PREFIX":"models",
   "OFFLINE_JSON_TESTING":"${OFFLINE_JSON_TESTING:-true}",
   "OFFLINE_JSON_TESTING_FILE_PATH":"${OFFLINE_JSON_TESTING_FILE_PATH:-/var/task/local_test_data/offline_data_combined_report_zoho_like.json}",
-  "USE_ML_MODELS":"${USE_ML_MODELS:-false}"
+  "USE_ML_MODELS":"${USE_ML_MODELS:-false}",
+  "USE_SAGEMAKER_ENDPOINT":"false"
 }}
 JSON
 )
@@ -103,10 +106,22 @@ JSON
   COMMON_DEPS_CACHE="$BUILD_ROOT/deps_common"
   prepare_deps_cache "$ROOT/requirements/lambda_common.txt" "$COMMON_DEPS_CACHE"
 
+  FORECAST_DEPS_CACHE="$COMMON_DEPS_CACHE"
+  GOAL_SEEK_DEPS_CACHE="$COMMON_DEPS_CACHE"
+  TRAINING_DEPS_CACHE="$COMMON_DEPS_CACHE"
+  if [[ "${USE_ML_MODELS:-false}" == "true" ]]; then
+    ML_DEPS_CACHE="$BUILD_ROOT/deps_ml"
+    prepare_deps_cache "$ROOT/requirements/lambda_ml.txt" "$ML_DEPS_CACHE"
+    FORECAST_DEPS_CACHE="$ML_DEPS_CACHE"
+    GOAL_SEEK_DEPS_CACHE="$ML_DEPS_CACHE"
+    TRAINING_DEPS_CACHE="$ML_DEPS_CACHE"
+  fi
+
   package_lambda ingestion_lambda "$ROOT/services/ingestion_lambda/src" "$COMMON_DEPS_CACHE"
   package_lambda validation_lambda "$ROOT/services/validation_lambda/src" "$COMMON_DEPS_CACHE"
   package_lambda report_lambda "$ROOT/services/report_lambda/src" "$COMMON_DEPS_CACHE"
-  package_lambda forecast_lambda "$ROOT/services/forecast_lambda/src" "$COMMON_DEPS_CACHE"
-  package_lambda goal_seek_lambda "$ROOT/services/goal_seek_lambda/src" "$COMMON_DEPS_CACHE"
+  package_lambda forecast_lambda "$ROOT/services/forecast_lambda/src" "$FORECAST_DEPS_CACHE"
+  package_lambda goal_seek_lambda "$ROOT/services/goal_seek_lambda/src" "$GOAL_SEEK_DEPS_CACHE"
+  package_lambda training_lambda "$ROOT/services/training_lambda/src" "$TRAINING_DEPS_CACHE"
 
 echo "Local IEIL lambdas created in LocalStack."

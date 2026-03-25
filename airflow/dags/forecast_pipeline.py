@@ -10,6 +10,7 @@ from airflow.models.param import Param
 from _lambda_utils import invoke_lambda
 
 UTC = timezone.utc
+DEFAULT_FORECAST_HORIZONS = [30, 60, 120]
 
 FORECAST_LAMBDA = os.getenv("FORECAST_LAMBDA_NAME", "unset-FORECAST_LAMBDA_NAME")
 
@@ -43,8 +44,10 @@ def build_event(**context) -> dict:
     if isinstance(hm, str):
         hm = [int(x.strip()) for x in hm.split(",") if x.strip()]
     if hm is None:
-        hm = [0, 30, 60, 120]
+        hm = DEFAULT_FORECAST_HORIZONS
     hm = sorted(set(int(x) for x in hm))
+    if any(x <= 0 for x in hm):
+        raise ValueError(f"horizons_minutes must contain only positive integers. got={hm}")
     p["horizons_minutes"] = hm
 
     return p
@@ -66,7 +69,7 @@ with DAG(
         "run_id": Param("", type="string", description="Pipeline run_id (same run used to write forecast rows)"),
         "validated_run_id": Param("", type="string", description="Run id of validated data to read from"),
         "device_id": Param("desalter", type="string", description="Device Identifier"),
-        "horizons_minutes": Param([0, 30, 60, 120], type="array", description="List of horizons in minutes"),
+        "horizons_minutes": Param(DEFAULT_FORECAST_HORIZONS, type="array", description="List of horizons in minutes"),
         "model_version": Param("", type="string", description="Optional: pin model_version. If empty, use ACTIVE model from model_registry."),
         "data_start_ts": Param("", type="string", description="Optional ISO timestamp"),
         "data_end_ts": Param("", type="string", description="Optional ISO timestamp (base timestamp)"),
