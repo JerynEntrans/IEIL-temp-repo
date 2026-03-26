@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ZohoIoTClient:
@@ -10,10 +10,19 @@ class ZohoIoTClient:
             "Content-Type": "application/json",
         }
 
+    @staticmethod
+    def _fmt_ts(ts: datetime) -> str:
+        # Zoho endpoint rejects long ISO strings (e.g., with fractional seconds/+00:00).
+        # Use compact UTC format expected by the API.
+        return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def fetch_custom_range(self, *, plant_id: str, from_ts: datetime, to_ts: datetime) -> dict | None:
         payload = {
             "period": "custom_range",
-            "custom_range": {"from": {"value": from_ts.isoformat()}, "to": {"value": to_ts.isoformat()}},
+            "custom_range": {
+                "from": {"value": self._fmt_ts(from_ts)},
+                "to": {"value": self._fmt_ts(to_ts)},
+            },
             "metrics": [{
                 "datapoint_names": ["Desalter Monitoring V2", "Boot Water Analysis Chloride", "Crude Details Crude Feed"],
                 "instance_name": plant_id,
