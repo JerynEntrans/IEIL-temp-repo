@@ -62,15 +62,49 @@ cp -R "$ROOT/services/${SERVICE_NAME}/src" "$WORKDIR/src"
 (cd "$WORKDIR" && rm -f "$ZIP_PATH" && zip -qr "$ZIP_PATH" .)
 
 ZIP_SIZE=$(du -sh "$ZIP_PATH" | cut -f1)
+ZIP_BYTES=$(stat -c%s "$ZIP_PATH")
 echo "==> Zip: $ZIP_PATH ($ZIP_SIZE)"
+
+# Lambda zip package limits:
+# - direct upload API payload is ~70 MB
+# - S3-based zip package must be <= 250 MB
+DIRECT_UPLOAD_LIMIT=$((70 * 1024 * 1024))
+S3_ZIP_LIMIT=$((250 * 1024 * 1024))
+if (( ZIP_BYTES > S3_ZIP_LIMIT )); then
+  echo "ERROR: Package is too large for Lambda zip deployment (${ZIP_SIZE})."
+  echo "       Max supported zip size is 250 MB (via S3)."
+  echo "       Reduce dependencies or migrate this function to container image deployment."
+  exit 2
+fi
 
 # ── Deploy code ─────────────────────────────────────────────────────────────────
 echo "==> Updating code for function: $FUNCTION_NAME ..."
-aws lambda update-function-code \
-  --function-name "$FUNCTION_NAME" \
-  --zip-file "fileb://$ZIP_PATH" \
-  --region "$REGION" \
-  --output text --query 'FunctionArn'
+if (( ZIP_BYTES <= DIRECT_UPLOAD_LIMIT )); then
+  aws lambda update-function-code \
+    --function-name "$FUNCTION_NAME" \
+    --zip-file "fileb://$ZIP_PATH" \
+    --region "$REGION" \
+    --output text --query 'FunctionArn'
+else
+  ARTIFACT_BUCKET="${LAMBDA_ARTIFACTS_BUCKET:-${RAW_S3_BUCKET:-}}"
+  ARTIFACT_PREFIX="${LAMBDA_ARTIFACTS_PREFIX:-lambda-artifacts}"
+  if [[ -z "$ARTIFACT_BUCKET" ]]; then
+    echo "ERROR: Large package requires S3-based deployment but no artifact bucket is configured."
+    echo "       Set LAMBDA_ARTIFACTS_BUCKET (or RAW_S3_BUCKET) and retry."
+    exit 2
+  fi
+
+  ARTIFACT_KEY="$ARTIFACT_PREFIX/$FUNCTION_NAME/${SERVICE_NAME}-$(date +%Y%m%dT%H%M%S).zip"
+  echo "==> Package exceeds direct upload limit; uploading artifact to s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY"
+  aws s3 cp "$ZIP_PATH" "s3://$ARTIFACT_BUCKET/$ARTIFACT_KEY" --region "$REGION"
+
+  aws lambda update-function-code \
+    --function-name "$FUNCTION_NAME" \
+    --s3-bucket "$ARTIFACT_BUCKET" \
+    --s3-key "$ARTIFACT_KEY" \
+    --region "$REGION" \
+    --output text --query 'FunctionArn'
+fi
 
 echo "==> Waiting for code update to complete..."
 aws lambda wait function-updated \

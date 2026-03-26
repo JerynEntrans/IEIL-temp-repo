@@ -1,25 +1,29 @@
 import os
+
 import requests
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
+load_dotenv(".env.deploy")
+
+
+class ZohoTokenManager:
+    def get_access_token(self) -> str:
+        payload = {
+            "refresh_token": os.getenv("ZOHO_REFRESH_TOKEN"),
+            "client_id": os.getenv("ZOHO_CLIENT_ID"),
+            "client_secret": os.getenv("ZOHO_CLIENT_SECRET"),
+            "grant_type": "refresh_token",
+        }
+        resp = requests.post(os.getenv("ZOHO_TOKEN_URL"), data=payload, timeout=30)
+        resp.raise_for_status()
+        token = resp.json().get("access_token")
+        if not token:
+            raise RuntimeError("Zoho access token not returned")
+        return token
+
 
 class ZohoIoTClient:
-
-    DATAPOINT_NAMES = [
-        # crude
-        "Crude Details Crude Feed",
-
-        # desalter
-        "Desalter Monitoring V2",
-        "Desalter Monitoring Press",
-        "Desalter Monitoring Interface Level",
-        "Desalter 2 Monitoring Interface Level",
-
-        # chemistry
-        "Boot Water Analysis Chloride",
-        "O/H Boot Water Analysis Chloride PPM",
-    ]
-
     def __init__(self, access_token: str):
         self._headers = {
             "Authorization": f"Zoho-oauthtoken {access_token}",
@@ -31,12 +35,12 @@ class ZohoIoTClient:
         return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     def fetch_custom_range(self, *, plant_id: str, from_ts: datetime, to_ts: datetime):
-        
-
         payload = {
             "metrics": [
                 {
-                    "datapoint_names": self.DATAPOINT_NAMES,
+                    "datapoint_names": [
+                        "Desalter Monitoring V2", "Boot Water Analysis Chloride", "Crude Details Crude Feed"
+                    ],
                     "instance_name": plant_id,
                     "period": "custom_range",
                     "custom_range": {
@@ -54,3 +58,16 @@ class ZohoIoTClient:
         if resp.status_code == 204 or not resp.text:
             return None
         return resp.json()
+
+token = ZohoTokenManager().get_access_token()
+client = ZohoIoTClient(token)
+
+from_ts = datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+to_ts = datetime(2026, 3, 2, 0, 0, 0, tzinfo=timezone.utc)
+
+data = client.fetch_custom_range(
+    plant_id="CDU1",
+    from_ts=from_ts,
+    to_ts=to_ts,
+)
+print(data)

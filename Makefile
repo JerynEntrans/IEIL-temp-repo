@@ -12,7 +12,11 @@ EC2_USER ?= ubuntu
 	train-forecast-local train-goalseek-local \
 	deploy-check migrate-db-prod migrate-db-prod-tunnel \
 	deploy-lambda-ingestion deploy-lambda-validation deploy-lambda-forecast \
-	deploy-lambda-goalseek deploy-lambda-report deploy-lambdas \
+	deploy-lambda-goalseek deploy-lambda-report \
+	deploy-lambda-forecast-auto deploy-lambda-goalseek-auto deploy-lambdas \
+	lambda-ml-image-build-forecast lambda-ml-image-build-goalseek \
+	lambda-ml-image-push-forecast lambda-ml-image-push-goalseek \
+	deploy-lambda-forecast-image deploy-lambda-goalseek-image \
 	ecr-login airflow-image-build airflow-image-push deploy-airflow
 
 help:
@@ -58,7 +62,15 @@ help:
 	@echo "  make deploy-lambda-validation     Deploy validation lambda only"
 	@echo "  make deploy-lambda-forecast       Deploy forecast lambda only"
 	@echo "  make deploy-lambda-goalseek       Deploy goal-seek lambda only"
+	@echo "  make deploy-lambda-forecast-auto  Deploy forecast (image if USE_ML_MODELS=true)"
+	@echo "  make deploy-lambda-goalseek-auto  Deploy goal-seek (image if USE_ML_MODELS=true)"
 	@echo "  make deploy-lambda-report         Deploy report lambda only"
+	@echo "  make lambda-ml-image-build-forecast   Build forecast Lambda container image"
+	@echo "  make lambda-ml-image-build-goalseek   Build goal-seek Lambda container image"
+	@echo "  make lambda-ml-image-push-forecast    Build + push forecast Lambda image"
+	@echo "  make lambda-ml-image-push-goalseek    Build + push goal-seek Lambda image"
+	@echo "  make deploy-lambda-forecast-image     Deploy forecast Lambda from container image"
+	@echo "  make deploy-lambda-goalseek-image     Deploy goal-seek Lambda from container image"
 	@echo "  make migrate-db-prod              Run Flyway migrations against RDS"
 	@echo "  make migrate-db-prod-tunnel       Run migrations via EC2 SSH tunnel (private RDS)"
 	@echo "  make ecr-login                    Authenticate Docker with ECR"
@@ -266,13 +278,80 @@ deploy-lambda-goalseek: deploy-check
 	  LAMBDA_NAME=$$GOAL_SEEK_LAMBDA_NAME \
 	  bash scripts/deploy-lambda.sh goal_seek_lambda $$DEPS
 
+deploy-lambda-forecast-auto: deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  if [ "$$USE_ML_MODELS" = "true" ]; then \
+	    $(MAKE) deploy-lambda-forecast-image; \
+	  else \
+	    $(MAKE) deploy-lambda-forecast; \
+	  fi
+
+deploy-lambda-goalseek-auto: deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  if [ "$$USE_ML_MODELS" = "true" ]; then \
+	    $(MAKE) deploy-lambda-goalseek-image; \
+	  else \
+	    $(MAKE) deploy-lambda-goalseek; \
+	  fi
+
 deploy-lambda-report: deploy-check
 	@set -a && source $(DEPLOY_ENV) && set +a && \
 	  LAMBDA_NAME=$$REPORT_LAMBDA_NAME \
 	  bash scripts/deploy-lambda.sh report_lambda common
 
+lambda-ecr-ensure-repo: deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  REPO_NAME="$$REPO_NAME"; \
+	  [ -n "$$REPO_NAME" ] || { echo "ERROR: REPO_NAME must be provided"; exit 1; }; \
+	  aws ecr describe-repositories --region $$AWS_REGION --repository-names "$$REPO_NAME" >/dev/null 2>&1 || \
+	    aws ecr create-repository --region $$AWS_REGION --repository-name "$$REPO_NAME" >/dev/null
+
+lambda-ml-image-build-forecast: deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  docker buildx build \
+	    --platform linux/amd64 \
+	    --provenance=false \
+	    --sbom=false \
+	    --load \
+	    -f docker/Dockerfile.lambda.ml \
+	    --build-arg SERVICE_NAME=forecast_lambda \
+	    -t $$ECR_HOST/$$FORECAST_ECR_REPOSITORY:$$ECR_IMAGE_TAG \
+	    .
+
+lambda-ml-image-build-goalseek: deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  docker buildx build \
+	    --platform linux/amd64 \
+	    --provenance=false \
+	    --sbom=false \
+	    --load \
+	    -f docker/Dockerfile.lambda.ml \
+	    --build-arg SERVICE_NAME=goal_seek_lambda \
+	    -t $$ECR_HOST/$$GOAL_SEEK_ECR_REPOSITORY:$$ECR_IMAGE_TAG \
+	    .
+
+lambda-ml-image-push-forecast: ecr-login lambda-ml-image-build-forecast
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  $(MAKE) lambda-ecr-ensure-repo REPO_NAME=$$FORECAST_ECR_REPOSITORY && \
+	  docker push $$ECR_HOST/$$FORECAST_ECR_REPOSITORY:$$ECR_IMAGE_TAG
+
+lambda-ml-image-push-goalseek: ecr-login lambda-ml-image-build-goalseek
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  $(MAKE) lambda-ecr-ensure-repo REPO_NAME=$$GOAL_SEEK_ECR_REPOSITORY && \
+	  docker push $$ECR_HOST/$$GOAL_SEEK_ECR_REPOSITORY:$$ECR_IMAGE_TAG
+
+deploy-lambda-forecast-image: lambda-ml-image-push-forecast deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  IMAGE_URI="$$ECR_HOST/$$FORECAST_ECR_REPOSITORY:$$ECR_IMAGE_TAG" && \
+	  bash scripts/deploy-lambda-image.sh "$$FORECAST_LAMBDA_NAME" "$$IMAGE_URI"
+
+deploy-lambda-goalseek-image: lambda-ml-image-push-goalseek deploy-check
+	@set -a && source $(DEPLOY_ENV) && set +a && \
+	  IMAGE_URI="$$ECR_HOST/$$GOAL_SEEK_ECR_REPOSITORY:$$ECR_IMAGE_TAG" && \
+	  bash scripts/deploy-lambda-image.sh "$$GOAL_SEEK_LAMBDA_NAME" "$$IMAGE_URI"
+
 deploy-lambdas: deploy-lambda-ingestion deploy-lambda-validation \
-                deploy-lambda-forecast deploy-lambda-goalseek deploy-lambda-report
+                deploy-lambda-forecast-auto deploy-lambda-goalseek-auto deploy-lambda-report
 	@echo "All lambdas deployed."
 
 # ── Airflow EC2 deploy ──────────────────────────────────────────────────────────
@@ -285,13 +364,12 @@ airflow-image-build: deploy-check
 	@set -a && source $(DEPLOY_ENV) && set +a && \
 	  docker build \
 	    -f docker/Dockerfile.airflow.prod \
-	    -t $$ECR_HOST/$$ECR_REPOSITORY:$$ECR_IMAGE_TAG \
-	    -t $$AIRFLOW_DOCKER_IMAGE_NAME:latest \
+	    -t $$ECR_HOST/$$AIRFLOW_ECR_REPOSITORY:$$ECR_IMAGE_TAG \
 	    .
 
 airflow-image-push: ecr-login airflow-image-build
 	@set -a && source $(DEPLOY_ENV) && set +a && \
-	  docker push $$ECR_HOST/$$ECR_REPOSITORY:$$ECR_IMAGE_TAG
+	  docker push $$ECR_HOST/$$AIRFLOW_ECR_REPOSITORY:$$ECR_IMAGE_TAG
 	@echo "Image pushed to ECR."
 
 # Copies compose file + env to EC2, ECR-logins the EC2, pulls the new image,
@@ -311,11 +389,11 @@ deploy-airflow: airflow-image-push deploy-check
 	  printf '%s' "$$ECR_LOGIN_PASSWORD" | ssh $$SSH_OPTS $$EC2 \
 	    "command -v docker >/dev/null 2>&1 || { echo 'ERROR: docker not found on EC2 PATH'; exit 127; }; docker login --username AWS --password-stdin $$ECR_HOST" && \
 	  echo "==> Pulling new image on EC2..." && \
-	  ssh $$SSH_OPTS $$EC2 "docker pull $$ECR_HOST/$$ECR_REPOSITORY:$$ECR_IMAGE_TAG" && \
+	  ssh $$SSH_OPTS $$EC2 "docker pull $$ECR_HOST/$$AIRFLOW_ECR_REPOSITORY:$$ECR_IMAGE_TAG" && \
 	  echo "==> Restarting Airflow services on EC2..." && \
 	  ssh $$SSH_OPTS $$EC2 \
 	    "cd /home/$$SSH_USER && \
-	     ECR_HOST=$$ECR_HOST ECR_REPOSITORY=$$ECR_REPOSITORY ECR_IMAGE_TAG=$$ECR_IMAGE_TAG \
+	     ECR_HOST=$$ECR_HOST AIRFLOW_ECR_REPOSITORY=$$AIRFLOW_ECR_REPOSITORY ECR_IMAGE_TAG=$$ECR_IMAGE_TAG \
 	     docker compose -f docker-compose.prod.yml --env-file .env.airflow up -d --force-recreate" && \
 	  echo "==> Airflow deployed to $$AIRFLOW_EC2_INSTANCE_PUBLIC_IP."
 

@@ -3,7 +3,7 @@
 # Image is pulled from ECR. All config comes from .env.airflow on the EC2.
 
 x-airflow-common: &airflow-common
-  image: ${ECR_HOST}/${ECR_REPOSITORY}:${ECR_IMAGE_TAG:-latest}
+  image: ${ECR_HOST}/${AIRFLOW_ECR_REPOSITORY}:${ECR_IMAGE_TAG:-latest}
   env_file:
     - .env.airflow
   environment:
