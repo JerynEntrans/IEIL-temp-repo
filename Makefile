@@ -5,7 +5,8 @@ LOCALSTACK_SERVICE ?= localstack
 BACKUP_WAIT_SECONDS ?= 2
 
 .PHONY: help build build-no-cache up start stop safe-stop down restart ps logs logs-localstack \
-	health wait-localstack s3-buckets s3-flush clean clean-volumes prune shell-localstack shell-postgres
+	health wait-localstack s3-buckets s3-flush clean clean-volumes prune shell-localstack shell-postgres \
+	train-forecast-local train-goalseek-local
 
 help:
 	@echo "IEIL local stack operations"
@@ -28,6 +29,10 @@ help:
 	@echo "LocalStack S3:"
 	@echo "  make s3-buckets       List S3 buckets in LocalStack"
 	@echo "  make s3-flush         Force one immediate S3 backup snapshot"
+	@echo ""
+	@echo "Model training:"
+	@echo "  make train-forecast-local [DEVICE_ID=desalter]  Train + activate forecast model"
+	@echo "  make train-goalseek-local [DEVICE_ID=desalter]  Train + activate goal-seek model"
 	@echo ""
 	@echo "Shell access:"
 	@echo "  make shell-localstack Open shell in LocalStack container"
@@ -118,3 +123,9 @@ shell-localstack:
 
 shell-postgres:
 	$(COMPOSE) exec postgres bash
+
+train-forecast-local:
+	$(COMPOSE) exec -T airflow-scheduler python /workspace/scripts/train_local.py --model-type DESALTER_FORECAST --device-id $${DEVICE_ID:-desalter} --activate
+
+train-goalseek-local:
+	$(COMPOSE) exec -T airflow-scheduler python /workspace/scripts/train_local.py --model-type DESALTER_GOAL_SEEK --device-id $${DEVICE_ID:-desalter} --activate

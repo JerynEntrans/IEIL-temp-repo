@@ -12,12 +12,15 @@ FORECAST_TARGETS = [
     "desalter_brine_water_ph_ppm",
     "desalter_brine_water_oil_ppm",
 ]
+DEFAULT_FORECAST_HORIZONS = [30, 60, 120]
 
 
 def run_forecast(event: dict, *, db) -> dict:
     run_id = event.get("run_id")
     device_id = event.get("device_id", "desalter")
-    horizons = event.get("horizons_minutes") or [0, 30, 60, 120]
+    horizons = sorted({int(h) for h in (event.get("horizons_minutes") or DEFAULT_FORECAST_HORIZONS)})
+    if any(h <= 0 for h in horizons):
+        raise ValueError(f"horizons_minutes must contain only positive integers. got={horizons}")
     model_version = event.get("model_version", "naive-carry-forward")
 
     # Determine timestamp to forecast from
@@ -38,7 +41,7 @@ def run_forecast(event: dict, *, db) -> dict:
     # Get latest validated row at/before base time
     row = db.fetch_one(
         f"""
-        SELECT {",".join(FORECAST_TARGETS)}
+        SELECT recorded_at, {",".join(FORECAST_TARGETS)}
         FROM validated_desalter_data
         WHERE device_id = %s
           AND recorded_at <= %s
@@ -61,7 +64,34 @@ def run_forecast(event: dict, *, db) -> dict:
         )
         return {"run_id": run_id, "device_id": device_id, "skipped": True, "reason": "NO_VALIDATED_DATA"}
 
-    latest = dict(zip(FORECAST_TARGETS, row))
+    latest_validated_ts = row[0]
+    last_forecast_base = db.fetch_one(
+        """
+        SELECT MAX(forecast_timestamp - make_interval(mins => horizon_minutes))
+        FROM desalter_forecast_results
+        WHERE device_id=%s;
+        """,
+        (device_id,),
+    )
+    last_forecast_base = last_forecast_base[0] if last_forecast_base else None
+    if last_forecast_base is not None and latest_validated_ts <= last_forecast_base:
+        db.upsert_tracker(
+            run_id=run_id or "UNKNOWN",
+            process_name="FORECAST",
+            device_id=device_id,
+            state="SKIPPED",
+            data_start_ts=event.get("data_start_ts"),
+            data_end_ts=event.get("data_end_ts"),
+            meta={
+                "reason": "NO_NEW_VALIDATED_DATA",
+                "latest_validated_ts": latest_validated_ts.isoformat() if hasattr(latest_validated_ts, "isoformat") else str(latest_validated_ts),
+                "last_forecast_base_ts": last_forecast_base.isoformat() if hasattr(last_forecast_base, "isoformat") else str(last_forecast_base),
+            },
+            end_now=True,
+        )
+        return {"run_id": run_id, "device_id": device_id, "skipped": True, "reason": "NO_NEW_VALIDATED_DATA"}
+
+    latest = dict(zip(FORECAST_TARGETS, row[1:]))
     inserted = 0
 
     with db.cursor() as cur:

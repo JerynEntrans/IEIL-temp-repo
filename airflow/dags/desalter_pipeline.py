@@ -129,3 +129,4 @@ with DAG(
     report = PythonOperator(task_id="report", python_callable=run_report)
 
     ingestion >> validation >> forecast >> goal_seek >> report
+    forecast >> report

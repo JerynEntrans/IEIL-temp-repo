@@ -9,6 +9,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@postgres:5432/${AIRFLOW_DB_NAME:-airflow}
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__RBAC: "true"
+    AIRFLOW__WEBSERVER__AUTH_RATE_LIMITED: "false"
+    AIRFLOW__WEBSERVER__RATELIMIT_STORAGE_URI: "memory://"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
     AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
     PYTHONPATH: /opt/project:/opt/airflow/dags
@@ -91,6 +93,7 @@ services:
     environment:
       SERVICES: s3,lambda,iam,sts
       DEBUG: "1"
+      USE_ML_MODELS: ${USE_ML_MODELS:-false}
       PERSISTENCE: "1"
       SNAPSHOT_SAVE_STRATEGY: ON_REQUEST
       SNAPSHOT_LOAD_STRATEGY: ON_STARTUP

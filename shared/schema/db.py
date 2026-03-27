@@ -9,6 +9,7 @@ class ProcessName(str, Enum):
     FORECAST = "FORECAST"
     GOAL_SEEK = "GOAL_SEEK"
     REPORT_GENERATION = "REPORT_GENERATION"
+    TRAINING = "TRAINING"
 
 
 class ProcessingState(str, Enum):
@@ -28,6 +29,10 @@ class ModelSpec:
     artifact_sha256: str | None
     feature_schema: dict[str, Any]
     metrics: dict[str, Any]
+
+    @property
+    def sagemaker_endpoint_name(self) -> str | None:
+        return self.feature_schema.get("sagemaker_endpoint_name")
 
     @property
     def model_registry_id(self) -> int:
