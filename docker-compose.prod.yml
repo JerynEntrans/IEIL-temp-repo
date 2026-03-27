@@ -1,0 +1,74 @@
+# docker-compose.prod.yml — runs on the EC2 instance.
+# Only Airflow services; Postgres is RDS, S3/Lambda are real AWS.
+# Image is pulled from ECR. All config comes from .env.airflow on the EC2.
+
+x-airflow-common: &airflow-common
+  image: ${ECR_HOST}/${AIRFLOW_ECR_REPOSITORY}:${ECR_IMAGE_TAG:-latest}
+  env_file:
+    - .env.airflow
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@${DB_HOST}:${DB_PORT:-5432}/${AIRFLOW_DB_NAME}?sslmode=${DB_SSLMODE:-require}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__RBAC: "true"
+    AIRFLOW__API__AUTH_BACKENDS: >-
+      airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY}
+    PYTHONPATH: /opt/project:/opt/airflow/dags
+
+    AWS_DEFAULT_REGION: ${AWS_REGION}
+
+    # App DB (RDS)
+    DB_HOST:     ${DB_HOST}
+    DB_PORT:     ${DB_PORT:-5432}
+    DB_NAME:     ${DB_NAME}
+    DB_USER:     ${DB_USER}
+    DB_PASSWORD: ${DB_PASSWORD}
+    DB_SSLMODE:  ${DB_SSLMODE:-require}
+
+    # S3
+    RAW_S3_BUCKET:     ${RAW_S3_BUCKET}
+    RAW_S3_PREFIX:     ${RAW_S3_PREFIX:-raw/zoho}
+    REPORTS_S3_BUCKET: ${REPORTS_S3_BUCKET}
+    REPORTS_S3_PREFIX: ${REPORTS_S3_PREFIX:-reports}
+
+    # Lambda names (Airflow DAGs read these)
+    INGESTION_LAMBDA_NAME:  ${INGEST_LAMBDA_NAME}
+    VALIDATION_LAMBDA_NAME: ${VALIDATION_LAMBDA_NAME}
+    FORECAST_LAMBDA_NAME:   ${FORECAST_LAMBDA_NAME}
+    GOAL_SEEK_LAMBDA_NAME:  ${GOAL_SEEK_LAMBDA_NAME}
+    REPORT_LAMBDA_NAME:     ${REPORT_LAMBDA_NAME}
+
+    USE_ML_MODELS:          ${USE_ML_MODELS:-false}
+    USE_SAGEMAKER_ENDPOINT: ${USE_SAGEMAKER_ENDPOINT:-false}
+
+  restart: unless-stopped
+
+services:
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+    entrypoint: ["/bin/bash", "/entrypoint.prod.sh"]
+    command: ["init"]
+
+  airflow-webserver:
+    <<: *airflow-common
+    entrypoint: ["/bin/bash", "/entrypoint.prod.sh"]
+    command: ["webserver"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    entrypoint: ["/bin/bash", "/entrypoint.prod.sh"]
+    command: ["scheduler"]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  airflow_logs:

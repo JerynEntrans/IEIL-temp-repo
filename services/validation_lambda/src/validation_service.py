@@ -5,8 +5,10 @@ from datetime import datetime, timezone
 
 from shared.utils.s3 import parse_s3_uri, get_json
 from shared.schema.db import ProcessingState, ProcessName
+from shared.utils.logging import set_logging
 
 UTC = timezone.utc
+logger = set_logging(__name__)
 
 KNOWN_COLUMNS = {
     "desalter_monitoring_press_kg_cm2",
@@ -21,6 +23,15 @@ KNOWN_COLUMNS = {
     "desalter_salt_ptb_o_l",
     "desalter_brine_water_ph_ppm",
     "desalter_brine_water_oil_ppm",
+}
+
+METRIC_ALIASES = {
+    # Zoho metric labels -> internal validated_desalter_data columns
+    "Boot Water Analysis Chloride": "o_h_boot_water_analysis_chloride_ppm",
+    "O/H Boot Water Analysis Chloride PPM": "o_h_boot_water_analysis_chloride_ppm",
+    "Desalter Monitoring Press": "desalter_monitoring_press_kg_cm2",
+    "Desalter Monitoring Interface Level": "desalter_monitoring_interface_level",
+    "Desalter 2 Monitoring Interface Level": "desalter_2_monitoring_interface_level",
 }
 
 
@@ -44,6 +55,41 @@ def _parse_ts(v, fallback=None) -> datetime:
 
 
 def _extract_records(raw: dict) -> list[dict]:
+    # Zoho series payload shape:
+    # {"data": {"result": [{"Metric Name": [{"value":..., "timestamp":...}, ...]}]}}
+    if (
+        isinstance(raw, dict)
+        and isinstance(raw.get("data"), dict)
+        and isinstance(raw["data"].get("result"), list)
+        and raw["data"]["result"]
+        and isinstance(raw["data"]["result"][0], dict)
+    ):
+        by_ts: dict[int, dict] = {}
+        metric_group = raw["data"]["result"][0]
+
+        for metric_name, points in metric_group.items():
+            if not isinstance(points, list):
+                continue
+            out_name = METRIC_ALIASES.get(metric_name, metric_name)
+
+            for p in points:
+                if not isinstance(p, dict):
+                    continue
+                ts_ms = p.get("timestamp")
+                value = p.get("value")
+                if ts_ms is None:
+                    continue
+                try:
+                    ts_ms = int(ts_ms)
+                except Exception:
+                    continue
+
+                row = by_ts.setdefault(ts_ms, {"recorded_at": None, "metrics": {}})
+                row["recorded_at"] = datetime.fromtimestamp(ts_ms / 1000, tz=UTC).isoformat()
+                row["metrics"][out_name] = value
+
+        return [by_ts[k] for k in sorted(by_ts.keys())]
+
     if isinstance(raw, dict) and isinstance(raw.get("data"), list):
         recs = []
         for item in raw["data"]:
@@ -74,8 +120,17 @@ def run_validation(event: dict, *, db) -> dict:
     if not raw_s3_uri:
         raise ValueError("validation requires raw_s3_uri (from ingestion output)")
 
+    logger.info(
+        "Validation started: run_id=%s device_id=%s raw_s3_uri=%s",
+        run_id,
+        device_id,
+        raw_s3_uri,
+    )
+
     bucket, key = parse_s3_uri(raw_s3_uri)
+    logger.info("Loading raw payload from s3://%s/%s", bucket, key)
     raw = get_json(bucket, key)
+    logger.info("Raw payload loaded: type=%s top_level_keys=%s", type(raw).__name__, list(raw.keys()) if isinstance(raw, dict) else None)
 
     db.upsert_tracker(
         run_id=run_id,
@@ -96,61 +151,70 @@ def run_validation(event: dict, *, db) -> dict:
 
     records = _extract_records(raw)
     inserted = 0
+    logger.info("Extracted %d records for validation", len(records))
 
     cols_sorted = sorted(KNOWN_COLUMNS)
 
-    with db.cursor() as cur:
-        for rec in records:
-            ts = _parse_ts(rec.get("recorded_at"), fallback=event.get("data_end_ts"))
+    try:
+        with db.cursor() as cur:
+            for idx, rec in enumerate(records, start=1):
+                ts = _parse_ts(rec.get("recorded_at"), fallback=event.get("data_end_ts"))
 
-            metrics = rec.get("metrics") or {}
-            if not isinstance(metrics, dict):
-                continue
+                metrics = rec.get("metrics") or {}
+                if not isinstance(metrics, dict):
+                    logger.warning("Skipping non-dict metrics at record %d", idx)
+                    continue
 
-            known = {k: _to_float(metrics.get(k)) for k in KNOWN_COLUMNS}
-            extras = {
-                k: metrics.get(k)
-                for k in metrics.keys()
-                if k not in KNOWN_COLUMNS and k not in ("timestamp", "recorded_at")
-            }
+                known = {k: _to_float(metrics.get(k)) for k in KNOWN_COLUMNS}
+                extras = {
+                    k: metrics.get(k)
+                    for k in metrics.keys()
+                    if k not in KNOWN_COLUMNS and k not in ("timestamp", "recorded_at")
+                }
 
-            cur.execute(
-                f"""
-                INSERT INTO validated_desalter_data (
-                  run_id, parent_run_id, recorded_at, device_id,
-                  plant_name, unit_name, location_name,
-                  {",".join(cols_sorted)},
-                  extras_json
+                cur.execute(
+                    f"""
+                    INSERT INTO validated_desalter_data (
+                      run_id, parent_run_id, recorded_at, device_id,
+                      plant_name, unit_name, location_name,
+                      {",".join(cols_sorted)},
+                      extras_json
+                    )
+                    VALUES (
+                      %(run_id)s, %(parent_run_id)s, %(recorded_at)s, %(device_id)s,
+                      %(plant_name)s, %(unit_name)s, %(location_name)s,
+                      {",".join([f"%({c})s" for c in cols_sorted])},
+                      %(extras_json)s::jsonb
+                    )
+                    ON CONFLICT (run_id, device_id, recorded_at)
+                    DO UPDATE SET
+                      plant_name = EXCLUDED.plant_name,
+                      unit_name = EXCLUDED.unit_name,
+                      location_name = EXCLUDED.location_name,
+                      {",".join([f"{c}=EXCLUDED.{c}" for c in cols_sorted])},
+                      extras_json = validated_desalter_data.extras_json || EXCLUDED.extras_json;
+                    """,
+                    {
+                        "run_id": run_id,
+                        "parent_run_id": run_id,
+                        "recorded_at": ts,
+                        "device_id": device_id,
+                        "plant_name": plant_name,
+                        "unit_name": unit_name,
+                        "location_name": location_name,
+                        **known,
+                        "extras_json": json.dumps(extras),
+                    },
                 )
-                VALUES (
-                  %(run_id)s, %(parent_run_id)s, %(recorded_at)s, %(device_id)s,
-                  %(plant_name)s, %(unit_name)s, %(location_name)s,
-                  {",".join([f"%({c})s" for c in cols_sorted])},
-                  %(extras_json)s::jsonb
-                )
-                ON CONFLICT (run_id, device_id, recorded_at)
-                DO UPDATE SET
-                  plant_name = EXCLUDED.plant_name,
-                  unit_name = EXCLUDED.unit_name,
-                  location_name = EXCLUDED.location_name,
-                  {",".join([f"{c}=EXCLUDED.{c}" for c in cols_sorted])},
-                  extras_json = validated_desalter_data.extras_json || EXCLUDED.extras_json;
-                """,
-                {
-                    "run_id": run_id,
-                    "parent_run_id": run_id,
-                    "recorded_at": ts,
-                    "device_id": device_id,
-                    "plant_name": plant_name,
-                    "unit_name": unit_name,
-                    "location_name": location_name,
-                    **known,
-                    "extras_json": json.dumps(extras),
-                },
-            )
-            inserted += 1
+                inserted += 1
+                if inserted % 50 == 0:
+                    logger.info("Validation progress: inserted=%d/%d", inserted, len(records))
 
-    db._conn.commit()
+        db._conn.commit()
+        logger.info("Validation DB commit complete: inserted=%d", inserted)
+    except Exception:
+        logger.exception("Validation failed while processing/inserting records")
+        raise
 
     db.upsert_tracker(
         run_id=run_id,
@@ -163,6 +227,8 @@ def run_validation(event: dict, *, db) -> dict:
         meta={"validated_rows": inserted},
         end_now=True,
     )
+
+    logger.info("Validation completed: run_id=%s inserted=%d skipped=%s", run_id, inserted, inserted == 0)
 
     return {
         "run_id": run_id,

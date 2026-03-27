@@ -16,6 +16,21 @@ def _parse_ts(v):
     return datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone(UTC)
 
 
+def _is_effectively_empty_payload(payload) -> bool:
+    """Treat common empty response shapes as no-data."""
+    if payload is None:
+        return True
+    if payload == {} or payload == []:
+        return True
+
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict) and data.get("result") == []:
+            return True
+
+    return False
+
+
 def ingest_zoho_incremental(event: dict, *, db) -> dict:
     run_id = event.get("run_id") or new_run_id()
     device_id = event["device_id"]
@@ -26,8 +41,12 @@ def ingest_zoho_incremental(event: dict, *, db) -> dict:
 
     data_end_utc = _parse_ts(event.get("data_end_ts")) or now_utc
 
+    force_lookback = str(event.get("force_lookback", "false")).lower() == "true"
+
     if event.get("data_start_ts"):
         data_start_utc = _parse_ts(event.get("data_start_ts"))
+    elif force_lookback:
+        data_start_utc = data_end_utc - timedelta(hours=lookback_hours)
     else:
         last_success_end = db.get_last_success_end(device_id=device_id)  # must read tracker SUCCESS
         data_start_utc = last_success_end or (data_end_utc - timedelta(hours=lookback_hours))
@@ -54,7 +73,7 @@ def ingest_zoho_incremental(event: dict, *, db) -> dict:
             client = ZohoIoTClient(token)
             payload = client.fetch_custom_range(plant_id=plant_id, from_ts=data_start_utc, to_ts=data_end_utc)
 
-        if payload is None:
+        if _is_effectively_empty_payload(payload):
             db.upsert_tracker(
                 run_id=run_id,
                 parent_run_id=None,
@@ -63,7 +82,7 @@ def ingest_zoho_incremental(event: dict, *, db) -> dict:
                 state=ProcessingState.SKIPPED,
                 data_start_ts=data_start_utc,
                 data_end_ts=data_end_utc,
-                meta={"reason": "NO_DATA"},
+                meta={"reason": "NO_DATA", "force_lookback": force_lookback},
                 end_now=True,
             )
             return {

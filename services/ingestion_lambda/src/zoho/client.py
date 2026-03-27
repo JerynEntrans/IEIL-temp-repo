@@ -1,24 +1,51 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ZohoIoTClient:
+
+    DATAPOINT_NAMES = [
+        # crude
+        "Crude Details Crude Feed",
+
+        # desalter
+        "Desalter Monitoring V2",
+        "Desalter Monitoring Press",
+        "Desalter Monitoring Interface Level",
+        "Desalter 2 Monitoring Interface Level",
+
+        # chemistry
+        "Boot Water Analysis Chloride",
+        "O/H Boot Water Analysis Chloride PPM",
+    ]
+
     def __init__(self, access_token: str):
         self._headers = {
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Zoho-oauthtoken {access_token}",
             "Content-Type": "application/json",
         }
 
-    def fetch_custom_range(self, *, plant_id: str, from_ts: datetime, to_ts: datetime) -> dict | None:
+    @staticmethod
+    def _fmt_ts(ts: datetime) -> str:
+        return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    def fetch_custom_range(self, *, plant_id: str, from_ts: datetime, to_ts: datetime):
+        
+
         payload = {
-            "period": "custom_range",
-            "custom_range": {"from": {"value": from_ts.isoformat()}, "to": {"value": to_ts.isoformat()}},
-            "metrics": [{
-                "datapoint_names": ["Desalter Monitoring V2", "Boot Water Analysis Chloride", "Crude Details Crude Feed"],
-                "instance_name": plant_id,
-                "sort_order": "asc",
-            }],
+            "metrics": [
+                {
+                    "datapoint_names": self.DATAPOINT_NAMES,
+                    "instance_name": plant_id,
+                    "period": "custom_range",
+                    "custom_range": {
+                        "from": {"value": self._fmt_ts(from_ts)},
+                        "to": {"value": self._fmt_ts(to_ts)},
+                    },
+                    "sort_order": "asc",
+                }
+            ]
         }
 
         resp = requests.post(os.getenv("ION_IOT_API_URL"), headers=self._headers, json=payload, timeout=60)

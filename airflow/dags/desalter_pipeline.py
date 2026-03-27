@@ -107,6 +107,21 @@ with DAG(
         "plant_id": Param("", type="string", description="Plant Identifier (e.g., CDU1)"),
         "device_id": Param("", type="string", description="Device Identifier (e.g., desalter)"),
         "lookback_hours": Param(24, type="integer", minimum=1, description="Lookback window in hours"),
+        "force_lookback": Param(
+            False,
+            type="boolean",
+            description="If true, ignore last successful ingestion window and use lookback_hours.",
+        ),
+        "data_start_ts": Param(
+            "",
+            type="string",
+            description="Optional ISO timestamp start (overrides lookback/incremental logic).",
+        ),
+        "data_end_ts": Param(
+            "",
+            type="string",
+            description="Optional ISO timestamp end (defaults to now in UTC).",
+        ),
 
         "s3_bucket": Param(ENV_RAW_BUCKET, type="string", description="Raw S3 bucket (defaults from RAW_S3_BUCKET)"),
         "s3_prefix": Param(ENV_RAW_PREFIX, type="string", description="Raw S3 prefix (defaults from RAW_S3_PREFIX)"),

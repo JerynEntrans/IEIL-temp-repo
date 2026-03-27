@@ -1,0 +1,26 @@
+FROM apache/airflow:2.9.3
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements /tmp/requirements
+RUN chown -R airflow:0 /tmp/requirements
+
+USER airflow
+RUN pip install --no-cache-dir -r /tmp/requirements/airflow.txt
+
+USER root
+RUN rm -rf /tmp/requirements
+
+# Copy application code into the image (no volume mounts needed on EC2)
+COPY --chown=airflow:0 shared            /opt/project/shared
+COPY --chown=airflow:0 airflow/dags      /opt/airflow/dags
+COPY --chown=airflow:0 docker/airflow/entrypoint.prod.sh /entrypoint.prod.sh
+RUN chmod +x /entrypoint.prod.sh
+
+USER airflow
+ENV PYTHONPATH=/opt/project:/opt/airflow/dags
