@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Build/runtime libs: xgboost wheels rely on libgomp at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/ml/code
+
+# Install ML/runtime dependencies used by the SageMaker training script.
+COPY requirements/lambda_common.txt /tmp/requirements/lambda_common.txt
+COPY requirements/lambda_ml.txt /tmp/requirements/lambda_ml.txt
+
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install -r /tmp/requirements/lambda_ml.txt \
+    && python -m pip install "SQLAlchemy>=2.0.0,<3.0.0"
+
+# Training entrypoint script used by SageMaker Training jobs.
+COPY services/sagemaker/train.py /opt/ml/code/train.py
+
+ENTRYPOINT ["python", "/opt/ml/code/train.py"]
